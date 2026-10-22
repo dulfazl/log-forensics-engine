@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log Forensics Engine</title>
+<meta name="description" content="Live streaming log analysis: regex parsing, KNN severity classification and k-nearest-neighbour anomaly detection.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a6fdb'/%3E%3Cpath d='M7 21l5-6 4 4 6-9 3 4' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f8f9fb; --text: #1b2230; --muted: #5d6777;
+  --border: #e1e5eb; --accent: #2a6fdb; --accent-ink: #ffffff; --grid: rgba(20, 30, 50, .07);
+  --crit: #8e1b1b; --err: #d64545; --warn: #c27a00; --info: #2a6fdb; --ok: #1f8a4c; --normal: #9aa3b0;
+  --anom-row: rgba(214, 69, 69, .09); --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1117; --panel: #161b24; --panel-2: #1b212c; --text: #e5e9f0; --muted: #98a2b3;
+    --border: #2a313d; --accent: #5b9bff; --accent-ink: #0b1220; --grid: rgba(255, 255, 255, .07);
+    --crit: #ff6b6b; --err: #f07171; --warn: #f0b429; --info: #5b9bff; --ok: #3ccf7f; --normal: #6b7585;
+    --anom-row: rgba(240, 113, 113, .13); --shadow: none; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1117; --panel: #161b24; --panel-2: #1b212c; --text: #e5e9f0; --muted: #98a2b3;
+  --border: #2a313d; --accent: #5b9bff; --accent-ink: #0b1220; --grid: rgba(255, 255, 255, .07);
+  --crit: #ff6b6b; --err: #f07171; --warn: #f0b429; --info: #5b9bff; --ok: #3ccf7f; --normal: #6b7585;
+  --anom-row: rgba(240, 113, 113, .13); --shadow: none; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;
+}
+button, input, select { font: inherit; color: inherit; }
+button {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+input, select {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px;
+  min-width: 0;
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 10px 16px;
+  align-items: center; padding: 10px 16px; background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand h1 { font-size: 16px; margin: 0; letter-spacing: .1px; }
+.brand small { color: var(--muted); display: block; font-size: 12px; }
+.logo { width: 28px; height: 28px; flex: none; }
+.strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border); font-size: 12.5px; white-space: nowrap;
+}
+.chip b { font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--normal); }
+.chip.live .dot { background: var(--ok); }
+.chip.calibrating .dot { background: var(--warn); }
+.chip.bad { border-color: var(--err); color: var(--err); }
+.chip.bad .dot { background: var(--err); }
+.actions { display: flex; gap: 6px; }
+
+main { max-width: 1400px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+.banner {
+  max-width: 1400px; margin: 12px auto 0; padding: 10px 14px; border-radius: 10px;
+  border: 1px solid var(--warn); background: var(--panel); width: calc(100% - 32px);
+}
+.banner.error { border-color: var(--err); color: var(--err); }
+.progress { height: 6px; background: var(--panel-2); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+.progress > div { height: 100%; width: 0; background: var(--warn); transition: width .3s; }
+
+.kpis { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.kpi, .card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+}
+.kpi { padding: 12px 14px; }
+.kpi .label { color: var(--muted); font-size: 12.5px; }
+.kpi .value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.kpi .sub { color: var(--muted); font-size: 12px; }
+.kpi.alert .value { color: var(--err); }
+
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.span-2 { grid-column: span 2; }
+.card { padding: 14px; min-width: 0; }
+.card h2 { font-size: 14px; margin: 0 0 2px; }
+.card .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+.chart-box { position: relative; height: 250px; }
+.empty-note { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; pointer-events: none; }
+
+.eval-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+.metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.metric { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.metric .label { color: var(--muted); font-size: 12px; }
+.metric .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.metric .sub { font-size: 11.5px; color: var(--muted); }
+.bar-cell { display: flex; align-items: center; gap: 8px; }
+.bar { flex: 1; height: 8px; background: var(--panel-2); border-radius: 99px; overflow: hidden; min-width: 60px; }
+.bar > div { height: 100%; background: var(--accent); }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.toolbar .grow { flex: 1 1 200px; }
+.toolbar label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 6px 9px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--panel-2); color: var(--muted); font-weight: 600; font-size: 12px; }
+#log-body tr { cursor: pointer; border-left: 3px solid transparent; }
+#log-body tr:hover { background: var(--panel-2); }
+#log-body tr.anom { background: var(--anom-row); }
+#log-body td.msg { max-width: 420px; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 12px; }
+#log-body td.reason { max-width: 300px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+.sev { display: inline-block; min-width: 72px; text-align: center; padding: 1px 6px; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: #fff; }
+.sev-CRITICAL { background: var(--crit); }
+.sev-ERROR { background: var(--err); }
+.sev-WARNING { background: var(--warn); }
+.sev-INFO { background: var(--info); }
+.sev-NONE { background: var(--normal); }
+tr.sevrow-CRITICAL { border-left-color: var(--crit) !important; }
+tr.sevrow-ERROR { border-left-color: var(--err) !important; }
+tr.sevrow-WARNING { border-left-color: var(--warn) !important; }
+.flag { color: var(--err); font-weight: 700; }
+.table-foot { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+.drawer {
+  position: fixed; top: 0; right: 0; height: 100%; width: min(560px, 100%); z-index: 30;
+  background: var(--panel); border-left: 1px solid var(--border); transform: translateX(105%);
+  transition: transform .2s ease; display: flex; flex-direction: column;
+}
+.drawer.open { transform: none; }
+.drawer header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.drawer header h3 { margin: 0; font-size: 15px; margin-right: auto; }
+.drawer .body { padding: 14px 16px; overflow-y: auto; display: grid; gap: 14px; }
+.drawer h4 { margin: 0 0 6px; font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+pre.raw {
+  margin: 0; padding: 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all;
+}
+.kv { width: 100%; border-collapse: collapse; }
+.kv td { border-bottom: 1px solid var(--border); padding: 4px 6px; white-space: normal; word-break: break-word; }
+.kv td:first-child { color: var(--muted); width: 40%; font-family: var(--mono); font-size: 12px; }
+.gauge { position: relative; height: 14px; background: var(--panel-2); border-radius: 99px; border: 1px solid var(--border); overflow: hidden; }
+.gauge .fill { position: absolute; inset: 0 auto 0 0; background: var(--ok); }
+.gauge .fill.over { background: var(--err); }
+.gauge .mark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); left: 50%; }
+.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); z-index: 25; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+
+dialog {
+  border: 1px solid var(--border); border-radius: 14px; background: var(--panel); color: var(--text);
+  padding: 0; width: min(520px, calc(100% - 32px));
+}
+dialog::backdrop { background: rgba(0, 0, 0, .4); }
+dialog form { padding: 18px; display: grid; gap: 12px; }
+dialog h3 { margin: 0; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.form-grid label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.form-grid label.full { grid-column: 1 / -1; }
+.form-error { color: var(--err); min-height: 1em; font-size: 13px; }
+.note { color: var(--muted); font-size: 12.5px; }
+
+.about { color: var(--muted); }
+.about h2 { color: var(--text); }
+.about dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0 0; }
+.about dt { color: var(--text); font-weight: 600; }
+.about dd { margin: 0; }
+footer { text-align: center; color: var(--muted); font-size: 12px; padding: 4px 16px 24px; }
+footer a { color: var(--accent); }
+
+@media (max-width: 1050px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .eval-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 680px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .span-2 { grid-column: auto; }
+  .brand small { display: none; }
+  .kpi .value { font-size: 22px; }
+  .chart-box { height: 220px; }
+  .metric-row { grid-template-columns: 1fr 1fr 1fr; }
+  .metric .value { font-size: 18px; }
+  .about dl { grid-template-columns: 1fr; }
+  .about dd { margin-bottom: 6px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .col-host, .col-reason { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><path d="M7 21l5-6 4 4 6-9 3 4" stroke="var(--accent-ink)" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div><h1>Log Forensics Engine</h1><small>streaming parse → KNN severity → k-NN anomaly detection</small></div>
+  </div>
+  <div class="strip" aria-live="polite">
+    <span class="chip" id="chip-source">source <b>–</b></span>
+    <span class="chip calibrating" id="chip-phase"><span class="dot"></span><b>starting</b></span>
+    <span class="chip" id="chip-uptime">uptime <b>0s</b></span>
+    <span class="chip" id="chip-threshold">threshold <b>–</b></span>
+    <span class="chip bad" id="chip-conn"><span class="dot"></span><b>connecting…</b></span>
+  </div>
+  <div class="actions">
+    <button id="btn-pause" type="button" aria-pressed="false">Pause</button>
+    <button id="btn-config" type="button">Settings</button>
+    <button id="btn-theme" type="button" aria-label="Toggle dark or light theme" title="Toggle theme">◐</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden>
+  <div id="banner-text"></div>
+  <div class="progress" id="banner-progress" hidden><div></div></div>
+</div>
+
+<main>
+  <section class="kpis" aria-label="Key figures">
+    <div class="kpi"><div class="label">Lines / sec (60 s)</div><div class="value" id="k-lps">0</div><div class="sub" id="k-lps-sub">&nbsp;</div></div>
+    <div class="kpi"><div class="label">Total lines</div><div class="value" id="k-total">0</div><div class="sub" id="k-total-sub">&nbsp;</div></div>
+    <div class="kpi alert"><div class="label">Anomalies</div><div class="value" id="k-anom">0</div><div class="sub" id="k-anom-sub">&nbsp;</div></div>
+    <div class="kpi"><div class="label">Anomaly rate</div><div class="value" id="k-rate">0%</div><div class="sub">of all lines</div></div>
+    <div class="kpi"><div class="label">Unparseable</div><div class="value" id="k-unp">0</div><div class="sub" id="k-unp-sub">&nbsp;</div></div>
+  </section>
+
+  <section class="grid">
+    <div class="card span-2">
+      <h2>Throughput</h2>
+      <p class="hint">Lines and anomalies per second over the last 2 minutes.</p>
+      <div class="chart-box"><canvas id="c-rate" aria-label="Lines and anomalies per second"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Severity</h2>
+      <p class="hint">KNN-predicted severity of every parsed line.</p>
+      <div class="chart-box"><canvas id="c-sev" aria-label="Severity counts"></canvas><div class="empty-note" id="sev-empty">waiting for data</div></div>
+    </div>
+    <div class="card span-2">
+      <h2>Anomaly distance</h2>
+      <p class="hint">Mean distance to the k nearest baseline neighbours (log scale). Dashed line = threshold. Red = flagged; grey = sampled normal traffic.</p>
+      <div class="chart-box"><canvas id="c-dist" aria-label="Anomaly distance over time"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Top offending IPs</h2>
+      <p class="hint">Failed logins per IP among the last 1,000 failures.</p>
+      <div class="chart-box"><canvas id="c-ips" aria-label="Failed logins per IP"></canvas><div class="empty-note" id="ips-empty">no failed logins yet</div></div>
+    </div>
+  </section>
+
+  <section class="card" id="eval-card" hidden>
+    <h2>Live evaluation <span class="note">(synthetic mode: scored against ground-truth labels)</span></h2>
+    <p class="hint" id="eval-hint">&nbsp;</p>
+    <div class="eval-grid">
+      <div>
+        <div class="metric-row">
+          <div class="metric"><div class="label">Precision</div><div class="value" id="m-p">–</div><div class="sub" id="m-p2">&nbsp;</div></div>
+          <div class="metric"><div class="label">Recall</div><div class="value" id="m-r">–</div><div class="sub" id="m-r2">&nbsp;</div></div>
+          <div class="metric"><div class="label">F1</div><div class="value" id="m-f">–</div><div class="sub" id="m-f2">&nbsp;</div></div>
+        </div>
+        <p class="note">Big numbers count every line, so malformed lines (auto-flagged as unparseable) are included. The small "parsed only" numbers are the KNN detector on its own.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Anomaly type</th><th class="num">Support</th><th class="num">Detected</th><th>Recall</th></tr></thead>
+          <tbody id="eval-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Live log</h2>
+    <p class="hint">Newest first, last 100 matching events. Click a row for details.</p>
+    <div class="toolbar">
+      <select id="f-sev" aria-label="Filter by severity">
+        <option value="">All severities</option>
+        <option>CRITICAL</option><option>ERROR</option><option>WARNING</option><option>INFO</option>
+        <option value="UNPARSEABLE">Unparseable</option>
+      </select>
+      <label><input type="checkbox" id="f-anom"> anomalies only</label>
+      <input class="grow" id="f-search" type="search" placeholder="Search raw line, IP, reason…" aria-label="Search events">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Time</th><th>Severity</th><th class="col-host">Host / process</th><th>IP</th>
+          <th>Message</th><th class="num">Distance</th><th class="col-reason">Reason</th>
+        </tr></thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
+    <div class="table-foot" id="table-foot">&nbsp;</div>
+  </section>
+
+  <section class="card about">
+    <h2>What each panel means</h2>
+    <dl>
+      <dt>Header</dt><dd>Where lines come from, whether the engine is still <i>calibrating</i> its baseline (the first N lines define "normal") or <i>live</i>, uptime, and the current distance threshold. Pause freezes the view without stopping the engine.</dd>
+      <dt>KPI cards</dt><dd>Throughput over the last 60 s, totals since the engine (re)started, anomalies and their share, and lines no parser format matched.</dd>
+      <dt>Throughput</dt><dd>Per-second line and anomaly counts. Spikes of red during a burst are attacks being caught as they happen.</dd>
+      <dt>Severity</dt><dd>The KNN classifier's prediction. It learns from keyword-based seed labels on a sliding window and is refit every 100 lines.</dd>
+      <dt>Anomaly distance</dt><dd>Each dot is a line's mean distance to its k nearest neighbours in the (standardized) baseline. Above the dashed threshold = anomalous. The threshold is a percentile of the baseline's own distances.</dd>
+      <dt>Top offending IPs</dt><dd>Sources of the most failed logins recently: brute-force candidates.</dd>
+      <dt>Live log</dt><dd>Every event, colour-coded by severity; anomalies are tinted red with the reason (which features stood out, in standard deviations). Log text is attacker-controlled, so it is always inserted as plain text.</dd>
+      <dt>Detail drawer</dt><dd>Raw line, parsed fields, the feature vector fed to the models, and distance versus threshold.</dd>
+      <dt>Live evaluation</dt><dd>Only for synthetic traffic, where every line carries a ground-truth label: precision, recall, F1 and recall per anomaly type.</dd>
+    </dl>
+  </section>
+</main>
+<footer>Log Forensics Engine · FastAPI + Server-Sent Events + Chart.js · <a href="https://github.com/dulfazl/log-forensics-engine" rel="noopener">source on GitHub</a></footer>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawer-title">
+  <header>
+    <h3 id="drawer-title">Event</h3>
+    <button type="button" id="drawer-close" aria-label="Close details">Close</button>
+  </header>
+  <div class="body" id="drawer-body"></div>
+</aside>
+
+<dialog id="config-dialog">
+  <form method="dialog" id="config-form">
+    <h3>Engine settings</h3>
+    <p class="note" id="config-note">Applying restarts the engine and recalibrates the baseline.</p>
+    <div class="form-grid">
+      <label class="full">Source
+        <select name="source" id="cf-source">
+          <option value="synthetic">synthetic (labeled demo traffic)</option>
+          <option value="udp">udp (syslog listener)</option>
+          <option value="tail">tail (local file)</option>
+          <option value="ssh">ssh (remote tail -F)</option>
+        </select>
+      </label>
+      <label>Threshold percentile<input name="threshold_percentile" type="number" min="50" max="100" step="0.1"></label>
+      <label>Baseline size<input name="baseline_size" type="number" min="20" max="5000" step="10"></label>
+      <label data-src="synthetic">Anomaly rate<input name="anomaly_rate" type="number" min="0" max="0.5" step="0.01"></label>
+      <label data-src="synthetic">Lines per second<input name="rate" type="number" min="1" max="500" step="1"></label>
+      <label data-src="synthetic" class="full">Traffic mode
+        <select name="mode"><option value="mixed">mixed</option><option value="syslog">syslog</option><option value="access">access log</option></select>
+      </label>
+      <label data-src="udp">UDP bind host<input name="udp_host" type="text"></label>
+      <label data-src="udp">UDP port<input name="udp_port" type="number" min="1" max="65535"></label>
+      <label data-src="tail" class="full">File path<input name="tail_path" type="text" placeholder="/var/log/auth.log"></label>
+      <label data-src="ssh">SSH host<input name="ssh_host" type="text"></label>
+      <label data-src="ssh">SSH user<input name="ssh_user" type="text"></label>
+      <label data-src="ssh" class="full">Remote path<input name="ssh_path" type="text"></label>
+      <label data-src="ssh" class="full">Private key file (optional)<input name="ssh_key" type="text"></label>
+    </div>
+    <div class="form-error" id="config-error" role="alert"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end">
+      <button type="button" id="config-cancel">Cancel</button>
+      <button type="submit" class="primary" id="config-apply">Apply &amp; restart</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+<script>
+"use strict";
+// ---- limits: every client-side buffer is capped ---------------------------
+const MAX_TABLE_ROWS = 100;
+const MAX_BUFFER = 500;        // recent events kept for filtering / resume
+const MAX_PENDING = 500;       // events waiting to be drawn into the table
+const ROWS_PER_FRAME = 10;     // never insert more than this per animation frame
+const MAX_NORMAL_POINTS = 600; // scatter: sampled normal points
+const MAX_ANOM_POINTS = 300;   // scatter: anomalies (total stays under 1,000)
+const SCATTER_WINDOW_MS = 5 * 60 * 1000;
+const SEVERITIES = ["CRITICAL", "ERROR", "WARNING", "INFO"];
+
+const $ = (id) => document.getElementById(id);
+const state = {
+  paused: false, missed: 0, generation: null, config: null, featureNames: null,
+  anomalyFeatures: [], stats: null, dropped: 0, normalSeen: 0, sampleEvery: 1,
+};
+const buffer = [];
+const pending = [];
+const scatterNormal = [];
+const scatterAnom = [];
+let charts = {};
+
+// ---- small helpers (log text only ever goes through textContent) --------
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
+}
+const fmtInt = (n) => (n ?? 0).toLocaleString();
+const fmtPct = (x, d = 1) => (x == null ? "–" : (x * 100).toFixed(d) + "%");
+const fmt3 = (x) => (x == null ? "–" : Number(x).toFixed(3));
+function fmtDuration(s) {
+  s = Math.floor(s || 0);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+}
+function fmtClock(ms) {
+  const d = new Date(ms);
+  return d.toTimeString().slice(0, 8);
+}
+function eventTime(e) {
+  if (e.ts) return e.ts.slice(11, 19);
+  return fmtClock((e.ingest_ts || 0) * 1000);
+}
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function severityOf(e) { return e.parsed ? (e.severity || "INFO") : "UNPARSEABLE"; }
+
+// ---- theme ---------------------------------------------------------------
+function loadTheme() {
+  try {
+    const t = localStorage.getItem("lfe-theme");
+    if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+  } catch (_) { /* storage unavailable: follow the OS */ }
+}
+function toggleTheme() {
+  const current = document.documentElement.dataset.theme ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = current === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("lfe-theme", next); } catch (_) {}
+  applyChartTheme();
+}
+
+// ---- charts ----------------------------------------------------------------
+function makeCharts() {
+  if (!window.Chart) {
+    document.querySelectorAll(".chart-box").forEach((b) => {
+      b.replaceChildren(el("div", "empty-note", "Charts unavailable (Chart.js could not be loaded)"));
+    });
+    return;
+  }
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.animation = false;
+  Chart.defaults.maintainAspectRatio = false;
+
+  charts.rate = new Chart($("c-rate"), {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "lines / s", data: [], tension: 0.25, pointRadius: 0, borderWidth: 2, fill: true, yAxisID: "y" },
+      { label: "anomalies / s", data: [], tension: 0.25, pointRadius: 0, borderWidth: 2, yAxisID: "y1" },
+    ] },
+    options: {
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { ticks: { maxTicksLimit: 7, maxRotation: 0 } },
+        y: { beginAtZero: true, title: { display: true, text: "lines/s" } },
+        y1: { beginAtZero: true, position: "right", grid: { drawOnChartArea: false },
+              title: { display: true, text: "anomalies/s" } },
+      },
+      plugins: { legend: { position: "bottom" } },
+    },
+  });
+
+  charts.sev = new Chart($("c-sev"), {
+    type: "doughnut",
+    data: { labels: SEVERITIES, datasets: [{ data: [0, 0, 0, 0], borderWidth: 1 }] },
+    options: { cutout: "62%", plugins: { legend: { position: "bottom" } } },
+  });
+
+  charts.dist = new Chart($("c-dist"), {
+    type: "scatter",
+    data: { datasets: [
+      { label: "normal (sampled)", data: scatterNormal, pointRadius: 2 },
+      { label: "anomaly", data: scatterAnom, pointRadius: 3.5 },
+      { label: "threshold", type: "line", data: [], pointRadius: 0, borderWidth: 1.5, borderDash: [6, 4], showLine: true },
+    ] },
+    options: {
+      parsing: false,
+      scales: {
+        x: { type: "linear", ticks: { maxTicksLimit: 6, maxRotation: 0, callback: (v) => fmtClock(v) } },
+        y: { type: "logarithmic", title: { display: true, text: "distance" } },
+      },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(3)} @ ${fmtClock(c.parsed.x)}` } },
+      },
+    },
+  });
+
+  charts.ips = new Chart($("c-ips"), {
+    type: "bar",
+    data: { labels: [], datasets: [{ label: "failed logins", data: [], borderRadius: 4 }] },
+    options: { indexAxis: "y", scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+               plugins: { legend: { display: false } } },
+  });
+  applyChartTheme();
+}
+
+function applyChartTheme() {
+  if (!window.Chart || !charts.rate) return;
+  const text = cssVar("--muted"), grid = cssVar("--grid"), accent = cssVar("--accent");
+  const err = cssVar("--err"), normal = cssVar("--normal"), fg = cssVar("--text");
+  Chart.defaults.color = text;
+  for (const c of Object.values(charts)) {
+    for (const axis of Object.values(c.options.scales || {})) {
+      axis.grid = { ...(axis.grid || {}), color: grid };
+      axis.ticks = { ...(axis.ticks || {}), color: text };
+      if (axis.title) axis.title.color = text;
+    }
+    if (c.options.plugins && c.options.plugins.legend) c.options.plugins.legend.labels = { color: text, boxWidth: 12 };
+  }
+  const r = charts.rate.data.datasets;
+  r[0].borderColor = accent; r[0].backgroundColor = accent + "22";
+  r[1].borderColor = err; r[1].backgroundColor = err;
+  charts.sev.data.datasets[0].backgroundColor = ["--crit", "--err", "--warn", "--info"].map(cssVar);
+  charts.sev.data.datasets[0].borderColor = cssVar("--panel");
+  const d = charts.dist.data.datasets;
+  d[0].backgroundColor = normal; d[0].borderColor = normal;
+  d[1].backgroundColor = err; d[1].borderColor = err;
+  d[2].borderColor = fg;
+  charts.ips.data.datasets[0].backgroundColor = err;
+  Object.values(charts).forEach((c) => c.update("none"));
+}
+
+// ---- events ------------------------------------------------------------------
+function addScatter(e) {
+  if (e.distance == null) return;
+  const point = { x: e.ingest_ts * 1000, y: Math.max(e.distance, 0.005) };
+  if (e.is_anomaly) {
+    scatterAnom.push(point);
+    if (scatterAnom.length > MAX_ANOM_POINTS) scatterAnom.shift();
+  } else {
+    state.normalSeen += 1;
+    if (state.normalSeen % state.sampleEvery !== 0) return;
+    scatterNormal.push(point);
+    if (scatterNormal.length > MAX_NORMAL_POINTS) scatterNormal.shift();
+  }
+}
+
+function matchesFilter(e) {
+  const sev = $("f-sev").value;
+  if (sev && severityOf(e) !== sev) return false;
+  if ($("f-anom").checked && !e.is_anomaly) return false;
+  const q = $("f-search").value.trim().toLowerCase();
+  if (q) {
+    const hay = `${e.raw || ""} ${e.ip || ""} ${e.reason || ""} ${e.host || ""} ${e.process || ""}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
+
+function onEvent(e) {
+  if (state.generation !== null && e.gen !== undefined && e.gen !== state.generation) return;
+  if (e.seq <= lastSeq) return;   // already have it (backfill / resume overlap)
+  lastSeq = e.seq;
+  buffer.push(e);
+  if (buffer.length > MAX_BUFFER) buffer.shift();
+  if (state.paused) { state.missed += 1; updatePauseButton(); return; }
+  addScatter(e);
+  if (matchesFilter(e)) {
+    pending.push(e);
+    if (pending.length > MAX_PENDING) pending.shift();
+  }
+}
+
+function makeRow(e) {
+  const tr = el("tr");
+  const sev = severityOf(e);
+  if (e.is_anomaly) tr.classList.add("anom");
+  tr.classList.add("sevrow-" + sev);
+  tr.tabIndex = 0;
+  tr.appendChild(el("td", "num", eventTime(e)));
+  const sevCell = el("td");
+  sevCell.appendChild(el("span", "sev sev-" + (e.parsed ? sev : "NONE"), e.parsed ? sev : "UNPARSED"));
+  tr.appendChild(sevCell);
+  tr.appendChild(el("td", "col-host", e.parsed ? `${e.host || "-"} / ${e.process || "-"}` : "-"));
+  tr.appendChild(el("td", null, e.ip || "-"));
+  tr.appendChild(el("td", "msg", e.parsed ? e.message : e.raw));
+  const dist = el("td", "num", e.distance == null ? "–" : e.distance.toFixed(2));
+  if (e.is_anomaly) dist.classList.add("flag");
+  tr.appendChild(dist);
+  tr.appendChild(el("td", "reason col-reason", e.reason || (e.phase === "calibrating" ? "calibrating" : "")));
+  tr.addEventListener("click", () => openDrawer(e));
+  tr.addEventListener("keydown", (ev) => { if (ev.key === "Enter") openDrawer(e); });
+  return tr;
+}
+
+function renderFrame() {
+  if (pending.length && !state.paused) {
+    const body = $("log-body");
+    const batch = pending.splice(0, ROWS_PER_FRAME);
+    for (const e of batch) body.insertBefore(makeRow(e), body.firstChild);
+    while (body.rows.length > MAX_TABLE_ROWS) body.deleteRow(body.rows.length - 1);
+  }
+  requestAnimationFrame(renderFrame);
+}
+
+function rebuildTable() {
+  $("log-body").replaceChildren();
+  pending.length = 0;
+  const matching = buffer.filter(matchesFilter).slice(-MAX_TABLE_ROWS);
+  pending.push(...matching); // drawn ROWS_PER_FRAME at a time by renderFrame
+}
+
+function resetView() {
+  lastSeq = 0;
+  buffer.length = 0; pending.length = 0; scatterNormal.length = 0; scatterAnom.length = 0;
+  state.normalSeen = 0; state.dropped = 0;
+  $("log-body").replaceChildren();
+  closeDrawer();
+  if (charts.dist) charts.dist.update("none");
+}
+
+// ---- server-sent events, with reconnect + "disconnected" badge --------------
+let source = null, retryDelay = 1000, lastSeq = 0;
+function setConn(ok, text) {
+  const chip = $("chip-conn");
+  chip.classList.toggle("bad", !ok);
+  chip.classList.toggle("live", ok);
+  chip.querySelector("b").textContent = text || (ok ? "connected" : "disconnected");
+}
+function connect() {
+  if (source) source.close();
+  const after = state.generation !== null && lastSeq ? `?after=${state.generation}-${lastSeq}` : "";
+  source = new EventSource("/events" + after);
+  source.onopen = () => { setConn(true); retryDelay = 1000; };
+  source.onmessage = (m) => {
+    let e;
+    try { e = JSON.parse(m.data); } catch (_) { return; }
+    onEvent(e);
+  };
+  source.addEventListener("hello", (m) => {
+    const d = JSON.parse(m.data);
+    if (state.generation !== null && d.generation !== state.generation) { resetView(); loadConfig(); }
+    state.generation = d.generation;
+  });
+  source.addEventListener("reset", (m) => {
+    state.generation = JSON.parse(m.data).generation;
+    resetView(); loadConfig();
+  });
+  source.addEventListener("dropped", (m) => { state.dropped += JSON.parse(m.data).dropped; });
+  source.onerror = () => {
+    setConn(false);
+    if (source.readyState === EventSource.CLOSED) {   // browser gave up: retry ourselves
+      setTimeout(connect, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 15000);
+    }
+  };
+}
+
+// ---- REST polling ------------------------------------------------------------
+async function loadConfig() {
+  try {
+    const res = await fetch("/api/config");
+    const data = await res.json();
+    state.config = data;
+    state.featureNames = data.feature_names;
+    state.anomalyFeatures = data.anomaly_features || [];
+    for (const opt of $("cf-source").options) {
+      opt.disabled = !data.allowed_sources.includes(opt.value);
+    }
+    $("config-note").textContent = data.public_demo
+      ? "Public demo: only the synthetic source can be selected here. Run it locally for UDP, tail and SSH."
+      : "Applying restarts the engine and recalibrates the baseline.";
+  } catch (_) { /* retried on next reset / settings open */ }
+}
+
+async function backfill() {
+  try {
+    const res = await fetch("/api/events?limit=" + MAX_TABLE_ROWS);
+    const data = await res.json();
+    state.generation = data.generation;
+    const events = data.events.slice().reverse();
+    for (const e of events) onEvent(e);
+  } catch (_) {}
+}
+
+function updateHeader(s) {
+  $("chip-source").querySelector("b").textContent = s.source_type || s.config?.source || "–";
+  const phase = $("chip-phase");
+  phase.classList.remove("live", "calibrating", "bad");
+  let label = s.phase;
+  if (s.status === "error") { phase.classList.add("bad"); label = "error"; }
+  else if (s.status === "finished") { label = "source finished"; }
+  else if (s.phase === "live") { phase.classList.add("live"); label = "live"; }
+  else { phase.classList.add("calibrating"); label = `calibrating ${s.baseline.have}/${s.baseline.need}`; }
+  phase.querySelector("b").textContent = label;
+  $("chip-uptime").querySelector("b").textContent = fmtDuration(s.uptime_seconds);
+  $("chip-threshold").querySelector("b").textContent =
+    s.threshold == null ? "–" : `${s.threshold.toFixed(3)} (p${s.config?.threshold_percentile})`;
+
+  const banner = $("banner"), progress = $("banner-progress");
+  if (s.status === "error") {
+    banner.hidden = false; banner.classList.add("error"); progress.hidden = true;
+    $("banner-text").textContent = "Engine error: " + s.error;
+  } else if (s.phase !== "live" && s.status !== "finished") {
+    banner.hidden = false; banner.classList.remove("error"); progress.hidden = false;
+    const need = s.baseline.need || 1;
+    $("banner-text").textContent =
+      `Calibrating the baseline: learning what normal traffic looks like from the first ${need} parsed lines…`;
+    progress.firstElementChild.style.width = Math.min(100, (100 * s.baseline.have) / need) + "%";
+  } else {
+    banner.hidden = true;
+  }
+}
+
+function updateKpis(s) {
+  $("k-lps").textContent = s.lines_per_sec.toFixed(1);
+  $("k-lps-sub").textContent = `${s.anomalies_per_sec.toFixed(2)} anomalies/s`;
+  $("k-total").textContent = fmtInt(s.total_lines);
+  $("k-total-sub").textContent = `${fmtInt(s.parsed)} parsed`;
+  $("k-anom").textContent = fmtInt(s.anomalies);
+  $("k-anom-sub").textContent = s.phase === "live" ? "since calibration" : "unparseable only so far";
+  $("k-rate").textContent = fmtPct(s.anomaly_rate, 2);
+  $("k-unp").textContent = fmtInt(s.unparseable);
+  const udp = s.dropped_udp != null ? ` · UDP dropped ${fmtInt(s.dropped_udp)}` : "";
+  $("k-unp-sub").textContent = `malformed / unknown format${udp}`;
+  const foot = [];
+  foot.push(`${fmtInt(buffer.length)} events buffered in this tab`);
+  if (state.dropped) foot.push(`${fmtInt(state.dropped)} dropped (tab fell behind)`);
+  if (s.severity_agreement != null) foot.push(`severity KNN agrees with seed label on ${fmtPct(s.severity_agreement)}`);
+  foot.push(`severity refits ${fmtInt(s.severity_retrains)} · baseline refreshes ${fmtInt(s.baseline_refreshes)}`);
+  $("table-foot").textContent = foot.join(" · ");
+}
+
+function updateCharts(s) {
+  if (!charts.rate) return;
+  // timeline: the last 120 complete seconds (the current one is still filling up)
+  const now = Math.floor(Date.now() / 1000) - 1;
+  const map = new Map(s.timeline.map((b) => [b[0], b]));
+  const labels = [], lines = [], anoms = [];
+  for (let t = now - 119; t <= now; t++) {
+    const b = map.get(t);
+    labels.push(fmtClock(t * 1000));
+    lines.push(b ? b[1] : 0);
+    anoms.push(b ? b[2] : 0);
+  }
+  charts.rate.data.labels = labels;
+  charts.rate.data.datasets[0].data = lines;
+  charts.rate.data.datasets[1].data = anoms;
+  charts.rate.update("none");
+
+  const sevData = SEVERITIES.map((k) => s.severity_counts[k] || 0);
+  charts.sev.data.datasets[0].data = sevData;
+  charts.sev.update("none");
+  $("sev-empty").hidden = sevData.some((v) => v > 0);
+
+  charts.ips.data.labels = s.top_failed_ips.map((r) => r.ip);
+  charts.ips.data.datasets[0].data = s.top_failed_ips.map((r) => r.count);
+  charts.ips.update("none");
+  $("ips-empty").hidden = s.top_failed_ips.length > 0;
+
+  // scatter: ~5 sampled normal points per second, last 5 minutes
+  state.sampleEvery = Math.max(1, Math.ceil(s.lines_per_sec / 5));
+  const xmax = Date.now(), xmin = xmax - SCATTER_WINDOW_MS;
+  while (scatterNormal.length && scatterNormal[0].x < xmin) scatterNormal.shift();
+  while (scatterAnom.length && scatterAnom[0].x < xmin) scatterAnom.shift();
+  charts.dist.options.scales.x.min = xmin;
+  charts.dist.options.scales.x.max = xmax;
+  charts.dist.data.datasets[2].data = s.threshold == null ? [] : [{ x: xmin, y: s.threshold }, { x: xmax, y: s.threshold }];
+  charts.dist.update("none");
+}
+
+function updateEval(s) {
+  const card = $("eval-card");
+  const ev = s.evaluation;
+  if (s.source_type !== "synthetic" || !ev) { card.hidden = true; return; }
+  card.hidden = false;
+  const a = ev.with_unparseable, p = ev.parsed_only;
+  $("m-p").textContent = fmt3(a.precision); $("m-p2").textContent = `parsed only ${fmt3(p.precision)}`;
+  $("m-r").textContent = fmt3(a.recall);    $("m-r2").textContent = `parsed only ${fmt3(p.recall)}`;
+  $("m-f").textContent = fmt3(a.f1);        $("m-f2").textContent = `parsed only ${fmt3(p.f1)}`;
+  $("eval-hint").textContent =
+    `${fmtInt(ev.labeled_events)} live lines scored · TP ${a.tp} · FP ${a.fp} · FN ${a.fn} · TN ${fmtInt(a.tn)}`;
+  const body = $("eval-body");
+  body.replaceChildren();
+  for (const [type, row] of Object.entries(ev.per_type)) {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, type));
+    tr.appendChild(el("td", "num", fmtInt(row.support)));
+    tr.appendChild(el("td", "num", fmtInt(row.detected)));
+    const cell = el("td");
+    const wrap = el("div", "bar-cell");
+    const bar = el("div", "bar");
+    const fill = el("div");
+    fill.style.width = (row.recall * 100).toFixed(1) + "%";
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+    wrap.appendChild(el("span", "num", fmt3(row.recall)));
+    cell.appendChild(wrap);
+    tr.appendChild(cell);
+    body.appendChild(tr);
+  }
+}
+
+async function pollStats() {
+  try {
+    const res = await fetch("/api/stats", { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    const s = await res.json();
+    state.stats = s;
+    if (state.generation !== null && s.generation !== state.generation) { resetView(); state.generation = s.generation; loadConfig(); }
+    updateHeader(s);
+    if (!state.paused) { updateKpis(s); updateCharts(s); updateEval(s); }
+  } catch (_) {
+    setConn(false, "server unreachable");
+  } finally {
+    setTimeout(pollStats, 1000);
+  }
+}
+
+// ---- detail drawer -------------------------------------------------------------
+function kvTable(rows) {
+  const t = el("table", "kv");
+  for (const [k, v] of rows) {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, k));
+    tr.appendChild(el("td", null, v == null || v === "" ? "–" : v));
+    t.appendChild(tr);
+  }
+  return t;
+}
+function section(title, child) {
+  const s = el("section");
+  s.appendChild(el("h4", null, title));
+  s.appendChild(child);
+  return s;
+}
+function openDrawer(e) {
+  const body = $("drawer-body");
+  body.replaceChildren();
+  $("drawer-title").textContent = e.is_anomaly ? "Anomalous event" : "Event";
+
+  if (e.distance != null && e.threshold) {
+    const ratio = e.distance / e.threshold;
+    const wrap = el("div");
+    wrap.appendChild(el("div", null,
+      `distance ${e.distance.toFixed(3)} vs threshold ${e.threshold.toFixed(3)} (${ratio.toFixed(2)}× threshold)`));
+    const gauge = el("div", "gauge");
+    const fill = el("div", "fill" + (ratio > 1 ? " over" : ""));
+    fill.style.width = Math.min(100, ratio * 50) + "%";   // threshold sits at the middle
+    gauge.appendChild(fill);
+    gauge.appendChild(el("div", "mark"));
+    wrap.appendChild(gauge);
+    body.appendChild(section("Distance vs threshold", wrap));
+  }
+  body.appendChild(section("Verdict", kvTable([
+    ["anomaly", e.is_anomaly ? "yes" : "no"],
+    ["reason", e.reason],
+    ["phase", e.phase],
+    ["ground truth", e.label ? `${e.label.type}${e.label.anomalous ? " (anomalous)" : ""}` : null],
+  ])));
+  const raw = el("pre", "raw", e.raw);
+  body.appendChild(section("Raw line", raw));
+  body.appendChild(section("Parsed fields", kvTable([
+    ["parsed", e.parsed ? "yes" : "no (no known format matched)"],
+    ["format", e.format], ["timestamp", e.ts], ["host", e.host], ["process", e.process],
+    ["ip", e.ip], ["user", e.user], ["status", e.status], ["message", e.message],
+    ["severity (KNN)", e.severity_pred], ["severity (seed rule)", e.severity_seed], ["seq", e.seq],
+  ])));
+  if (e.features && state.featureNames) {
+    const rows = e.features.map((v, i) => {
+      const name = state.featureNames[i] || `f${i}`;
+      const used = state.anomalyFeatures.includes(name) ? " · anomaly model" : "";
+      return [name + used, Number(v).toFixed(4)];
+    });
+    body.appendChild(section("Feature vector", kvTable(rows)));
+  }
+  $("drawer").classList.add("open");
+  $("drawer").setAttribute("aria-hidden", "false");
+  $("scrim").classList.add("open");
+  $("drawer-close").focus();
+}
+function closeDrawer() {
+  $("drawer").classList.remove("open");
+  $("drawer").setAttribute("aria-hidden", "true");
+  $("scrim").classList.remove("open");
+}
+
+// ---- pause ----------------------------------------------------------------------
+function updatePauseButton() {
+  const b = $("btn-pause");
+  b.textContent = state.paused ? (state.missed ? `Resume (${state.missed} new)` : "Resume") : "Pause";
+  b.setAttribute("aria-pressed", String(state.paused));
+}
+function togglePause() {
+  state.paused = !state.paused;
+  if (!state.paused) {
+    state.missed = 0;
+    for (const e of buffer.slice(-MAX_ANOM_POINTS)) if (e.is_anomaly) addScatter(e);
+    rebuildTable();
+  }
+  updatePauseButton();
+}
+
+// ---- settings dialog -----------------------------------------------------------
+function syncSourceFields() {
+  const src = $("cf-source").value;
+  document.querySelectorAll("#config-form [data-src]").forEach((label) => {
+    label.hidden = label.dataset.src !== src;
+  });
+}
+async function openConfig() {
+  await loadConfig();
+  const cfg = state.config?.config || {};
+  const form = $("config-form");
+  for (const input of form.querySelectorAll("input, select")) {
+    if (input.name && cfg[input.name] != null) input.value = cfg[input.name];
+    else if (input.name && input.type !== "checkbox") input.value = input.name === "source" ? "synthetic" : "";
+  }
+  $("config-error").textContent = "";
+  syncSourceFields();
+  $("config-dialog").showModal();
+}
+async function applyConfig(ev) {
+  ev.preventDefault();
+  const form = $("config-form");
+  const src = $("cf-source").value;
+  const body = {};
+  for (const input of form.querySelectorAll("input, select")) {
+    if (!input.name) continue;
+    const label = input.closest("label");
+    if (label && label.dataset.src && label.dataset.src !== src) continue;
+    if (input.value === "") continue;
+    body[input.name] = input.type === "number" ? Number(input.value) : input.value;
+  }
+  $("config-apply").disabled = true;
+  try {
+    const res = await fetch("/api/config", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = typeof data.detail === "string" ? data.detail
+        : Array.isArray(data.detail) ? data.detail.map((d) => `${(d.loc || []).slice(-1)[0]}: ${d.msg}`).join("; ")
+        : `HTTP ${res.status}`;
+      $("config-error").textContent = detail;
+      return;
+    }
+    state.generation = data.generation;
+    resetView();
+    $("config-dialog").close();
+  } catch (err) {
+    $("config-error").textContent = "Could not reach the server.";
+  } finally {
+    $("config-apply").disabled = false;
+  }
+}
+
+// ---- wire up ----------------------------------------------------------------------
+loadTheme();
+$("btn-theme").addEventListener("click", toggleTheme);
+$("btn-pause").addEventListener("click", togglePause);
+$("btn-config").addEventListener("click", openConfig);
+$("config-cancel").addEventListener("click", () => $("config-dialog").close());
+$("config-form").addEventListener("submit", applyConfig);
+$("cf-source").addEventListener("change", syncSourceFields);
+$("drawer-close").addEventListener("click", closeDrawer);
+$("scrim").addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeDrawer(); });
+let searchTimer = null;
+$("f-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(rebuildTable, 150); });
+$("f-sev").addEventListener("change", rebuildTable);
+$("f-anom").addEventListener("change", rebuildTable);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyChartTheme);
+
+makeCharts();
+loadConfig();
+backfill().then(connect);
+pollStats();
+requestAnimationFrame(renderFrame);
+</script>
+</body>
+</html>
