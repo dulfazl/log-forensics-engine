@@ -258,11 +258,11 @@ def create_app(config=None, public_demo=False, ssh_password=None, autostart=True
                 "frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
         return response
 
-    @app.get("/", include_in_schema=False)
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
     def index():
         return FileResponse(os.path.join(STATIC_DIR, "index.html"), media_type="text/html")
 
-    @app.get("/healthz")
+    @app.api_route("/healthz", methods=["GET", "HEAD"])
     def healthz():
         return {"ok": True, "status": runner.status}
 

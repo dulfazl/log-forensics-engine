@@ -34,7 +34,7 @@ git clone https://github.com/dulfazl/log-forensics-engine.git
 cd log-forensics-engine
 python3 -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-make test          # 103 tests
+make test          # 104 tests
 make dashboard     # open http://127.0.0.1:8000
 ```
 
@@ -153,7 +153,7 @@ changes to the synthetic source; use it whenever the server is reachable by othe
 ```bash
 python memory_benchmark.py         # full engine incl. retraining, 1K -> 1M lines
 python generate_charts.py          # docs/images/*.png
-python -m pytest                   # 103 tests
+python -m pytest                   # 104 tests
 ruff check .                       # pip install -r requirements-dev.txt
 ```
 
@@ -339,7 +339,7 @@ uses `batch_size=1` for per-line latency.
 | `demo_remote_pipeline.py`, `demo_syslog_sender.py` | two-terminal remote demo |
 | `memory_benchmark.py`, `generate_charts.py` | benchmark and report charts |
 | `dashboard/server.py`, `dashboard/static/index.html` | FastAPI + SSE backend, Chart.js front end |
-| `tests/` | 103 tests, including an in-process SSH server for `ssh_tail` |
+| `tests/` | 104 tests, including an in-process SSH server for `ssh_tail` |
 
 ## What changed from the first version
 

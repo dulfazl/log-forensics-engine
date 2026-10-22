@@ -46,6 +46,11 @@ def test_index_served_with_csp(client):
     assert "chart.umd.min.js" in r.text
 
 
+def test_head_requests_for_uptime_checks(client):
+    assert client.head("/").status_code == 200
+    assert client.head("/healthz").status_code == 200
+
+
 def test_stats_snapshot_keys_and_calibration(client):
     snap = _wait_for(client, lambda s: s["phase"] == "live" and s["total_lines"] > 100)
     for key in ("lines_per_sec", "total_lines", "anomalies", "unparseable", "severity_counts",
