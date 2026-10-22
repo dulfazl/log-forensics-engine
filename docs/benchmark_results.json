@@ -1,0 +1,62 @@
+{
+  "rss_before_mb": 118.890625,
+  "batch_size": 256,
+  "mode": "mixed",
+  "checkpoints": [
+    {
+      "lines": 1000,
+      "tracemalloc_current_kb": 835.515625,
+      "tracemalloc_peak_kb": 1309.77734375,
+      "rss_mb": 121.6875,
+      "elapsed_s": 0.2544543328694999,
+      "anomalies": 83,
+      "severity_retrains": 11,
+      "baseline_refreshes": 1,
+      "tracked_ips": 13
+    },
+    {
+      "lines": 10000,
+      "tracemalloc_current_kb": 1230.5732421875,
+      "tracemalloc_peak_kb": 1934.21875,
+      "rss_mb": 122.125,
+      "elapsed_s": 2.1433794158510864,
+      "anomalies": 1507,
+      "severity_retrains": 100,
+      "baseline_refreshes": 9,
+      "tracked_ips": 13
+    },
+    {
+      "lines": 100000,
+      "tracemalloc_current_kb": 1639.1708984375,
+      "tracemalloc_peak_kb": 2992.4638671875,
+      "rss_mb": 123.78125,
+      "elapsed_s": 24.075191415846348,
+      "anomalies": 53041,
+      "severity_retrains": 999,
+      "baseline_refreshes": 99,
+      "tracked_ips": 13
+    },
+    {
+      "lines": 500000,
+      "tracemalloc_current_kb": 1597.005859375,
+      "tracemalloc_peak_kb": 3091.3525390625,
+      "rss_mb": 124.796875,
+      "elapsed_s": 112.49255191604607,
+      "anomalies": 389346,
+      "severity_retrains": 4982,
+      "baseline_refreshes": 498,
+      "tracked_ips": 13
+    },
+    {
+      "lines": 1000000,
+      "tracemalloc_current_kb": 1244.095703125,
+      "tracemalloc_peak_kb": 3114.3720703125,
+      "rss_mb": 124.828125,
+      "elapsed_s": 221.77326470799744,
+      "anomalies": 811133,
+      "severity_retrains": 9965,
+      "baseline_refreshes": 996,
+      "tracked_ips": 13
+    }
+  ]
+}
