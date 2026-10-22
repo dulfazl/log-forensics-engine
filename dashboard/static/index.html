@@ -516,7 +516,7 @@ function applyChartTheme() {
   const d = charts.dist.data.datasets;
   d[0].backgroundColor = normal; d[0].borderColor = normal;
   d[1].backgroundColor = err; d[1].borderColor = err;
-  d[2].borderColor = fg;
+  d[2].borderColor = fg; d[2].backgroundColor = fg;
   charts.ips.data.datasets[0].backgroundColor = err;
   Object.values(charts).forEach((c) => c.update("none"));
 }
@@ -751,9 +751,13 @@ function updateCharts(s) {
 
   // scatter: ~5 sampled normal points per second, last 5 minutes
   state.sampleEvery = Math.max(1, Math.ceil(s.lines_per_sec / 5));
-  const xmax = Date.now(), xmin = xmax - SCATTER_WINDOW_MS;
+  const xmax = Date.now();
+  let xmin = xmax - SCATTER_WINDOW_MS;
   while (scatterNormal.length && scatterNormal[0].x < xmin) scatterNormal.shift();
   while (scatterAnom.length && scatterAnom[0].x < xmin) scatterAnom.shift();
+  // Until 5 minutes of points exist, zoom to what we have instead of a mostly empty axis.
+  const oldest = Math.min(scatterNormal[0]?.x ?? xmax, scatterAnom[0]?.x ?? xmax);
+  xmin = Math.max(xmin, Math.min(oldest, xmax - 60 * 1000) - 5000);
   charts.dist.options.scales.x.min = xmin;
   charts.dist.options.scales.x.max = xmax;
   charts.dist.data.datasets[2].data = s.threshold == null ? [] : [{ x: xmin, y: s.threshold }, { x: xmax, y: s.threshold }];

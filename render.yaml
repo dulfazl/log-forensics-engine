@@ -1,0 +1,15 @@
+# Render Blueprint: the live dashboard as a free web service.
+# --public-demo restricts POST /api/config to the synthetic source, so
+# visitors cannot make the server tail files or open SSH connections.
+services:
+  - type: web
+    name: log-forensics-engine
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dashboard.server --source synthetic --public-demo --http-host 0.0.0.0 --http-port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.3
