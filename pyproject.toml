@@ -1,0 +1,27 @@
+[project]
+name = "log-forensics-engine"
+version = "1.0.0"
+description = "Streaming log analyser: regex parsing, KNN severity classification, k-NN anomaly detection and a live dashboard."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning:paramiko.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = ["B905"]  # zip() without strict= is intentional on equal-length streams
+
+[tool.ruff.lint.isort]
+known-local-folder = ["dashboard", "engine", "evaluate", "featurizer", "log_parser", "log_source",
+                      "memory_benchmark", "models", "remote_sources", "synthetic_logs", "ssh_test_server"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]  # realistic log lines in test data are long
