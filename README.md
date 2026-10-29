@@ -6,7 +6,7 @@ anomalies by **k-nearest-neighbour distance** to a learned baseline, ingests log
 other machines (**UDP syslog** and **SSH `tail -F`**), and shows everything on a **live
 web dashboard**.
 
-**Live demo:** https://log-forensics-engine.onrender.com (free tier: the first visit after a quiet spell takes ~1 minute to wake up)
+**Live demo:** https://log-forensics-engine.vercel.app (serverless: each visitor gets their own engine, which calibrates in a few seconds)
 
 ![Dashboard](docs/images/dashboard.jpg)
 
@@ -384,22 +384,36 @@ Each issue found in review, and what happened to it:
    (refresh off) to 0.33; the strict rule gives 0.62. A patient attacker can still drift
    the baseline. `refresh_every=0` turns refresh off.
 8. **The dashboard is a single process** with in-memory state and no login. The public
-   demo runs with `--public-demo`, so visitors can only change synthetic-traffic settings,
-   and all of them share one engine.
+   demo only accepts synthetic traffic, and on Vercel every visitor gets an independent
+   engine whose statistics restart with each ~4.5-minute session (see Deployment).
 9. **One global baseline** for all hosts and formats (see Future work).
 
 ## Deployment
 
-The dashboard runs on Render's free tier from [`render.yaml`](render.yaml):
+The live demo runs on **Vercel** (free Hobby plan), deployed from this repo on every push
+to `main`.
 
-```yaml
-buildCommand: pip install -r requirements.txt
-startCommand: python -m dashboard.server --source synthetic --public-demo --http-host 0.0.0.0 --http-port $PORT
-healthCheckPath: /healthz
-```
+Vercel runs code only while a request is open, so it cannot host the always-on engine
+thread of `dashboard/server.py`. It runs `dashboard/serverless.py` instead
+(entry point [`api/index.py`](api/index.py), settings in [`vercel.json`](vercel.json)):
 
-Free instances sleep after 15 minutes without traffic; the next visit wakes them, and
-the engine recalibrates its baseline from scratch.
+* each Server-Sent Events connection runs its own `StreamingEngine` on synthetic traffic:
+  the baseline calibrates at 100 lines/s, then live lines are paced at 20/s;
+* `Stats` snapshots travel on the same stream (`event: stats`), because nothing is shared
+  between requests for `/api/stats` to read;
+* a session ends after 270 s, under Vercel's 300 s limit (`event: bye`), and the browser
+  reconnects into a fresh session;
+* settings changed in the dashboard apply to that visitor only (query parameters), and
+  only the synthetic source is allowed.
+
+Vercel installs from `pyproject.toml` + `uv.lock`, which list only the runtime
+dependencies (157 MB); matplotlib, pytest, httpx2 and ruff are in the `dev` group.
+`requirements.txt` still installs everything for local use.
+
+Other options in the repo: a [`Dockerfile`](Dockerfile) (port 7860, `--public-demo`) for any
+container host, e.g. a Hugging Face Space with [`deploy/huggingface/README.md`](deploy/huggingface/README.md)
+as the Space README, and [`render.yaml`](render.yaml) for Render (the free service used at
+first was suspended).
 
 ## Team
 
