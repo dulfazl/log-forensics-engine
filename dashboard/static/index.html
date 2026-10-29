@@ -379,6 +379,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   paused: false, missed: 0, generation: null, config: null, featureNames: null,
   anomalyFeatures: [], stats: null, dropped: 0, normalSeen: 0, sampleEvery: 1,
+  stateless: false, overrides: {},   // stateless = serverless host: stats come over SSE
 };
 const buffer = [];
 const pending = [];
@@ -620,8 +621,14 @@ function setConn(ok, text) {
 }
 function connect() {
   if (source) source.close();
-  const after = state.generation !== null && lastSeq ? `?after=${state.generation}-${lastSeq}` : "";
-  source = new EventSource("/events" + after);
+  let query = "";
+  if (state.stateless) {
+    const qs = new URLSearchParams(state.overrides).toString();
+    query = qs ? `?${qs}` : "";
+  } else if (state.generation !== null && lastSeq) {
+    query = `?after=${state.generation}-${lastSeq}`;
+  }
+  source = new EventSource("/events" + query);
   source.onopen = () => { setConn(true); retryDelay = 1000; };
   source.onmessage = (m) => {
     let e;
@@ -638,6 +645,10 @@ function connect() {
     resetView(); loadConfig();
   });
   source.addEventListener("dropped", (m) => { state.dropped += JSON.parse(m.data).dropped; });
+  source.addEventListener("stats", (m) => {
+    try { handleStats(JSON.parse(m.data)); } catch (_) {}
+  });
+  source.addEventListener("bye", () => setConn(false, "starting a new session…"));
   source.onerror = () => {
     setConn(false);
     if (source.readyState === EventSource.CLOSED) {   // browser gave up: retry ourselves
@@ -653,13 +664,16 @@ async function loadConfig() {
     const res = await fetch("/api/config");
     const data = await res.json();
     state.config = data;
+    state.stateless = Boolean(data.stateless);
     state.featureNames = data.feature_names;
     state.anomalyFeatures = data.anomaly_features || [];
     for (const opt of $("cf-source").options) {
       opt.disabled = !data.allowed_sources.includes(opt.value);
     }
     $("config-note").textContent = data.public_demo
-      ? "Public demo: only the synthetic source can be selected here. Run it locally for UDP, tail and SSH."
+      ? (data.stateless
+        ? "Serverless demo: settings apply to your own session only. Run it locally for UDP, tail and SSH."
+        : "Public demo: only the synthetic source can be selected here. Run it locally for UDP, tail and SSH.")
       : "Applying restarts the engine and recalibrates the baseline.";
   } catch (_) { /* retried on next reset / settings open */ }
 }
@@ -796,15 +810,21 @@ function updateEval(s) {
   }
 }
 
+function handleStats(s) {
+  state.stats = s;
+  if (state.generation !== null && s.generation !== state.generation) {
+    resetView(); state.generation = s.generation;
+    if (!state.stateless) loadConfig();
+  }
+  updateHeader(s);
+  if (!state.paused) { updateKpis(s); updateCharts(s); updateEval(s); }
+}
+
 async function pollStats() {
   try {
     const res = await fetch("/api/stats", { cache: "no-store" });
     if (!res.ok) throw new Error(res.status);
-    const s = await res.json();
-    state.stats = s;
-    if (state.generation !== null && s.generation !== state.generation) { resetView(); state.generation = s.generation; loadConfig(); }
-    updateHeader(s);
-    if (!state.paused) { updateKpis(s); updateCharts(s); updateEval(s); }
+    handleStats(await res.json());
   } catch (_) {
     setConn(false, "server unreachable");
   } finally {
@@ -940,9 +960,15 @@ async function applyConfig(ev) {
       $("config-error").textContent = detail;
       return;
     }
-    state.generation = data.generation;
     resetView();
     $("config-dialog").close();
+    if (state.stateless) {
+      const { source: _ignored, ...rest } = body;
+      state.overrides = rest;
+      connect();              // a new session with these settings
+    } else {
+      state.generation = data.generation;
+    }
   } catch (err) {
     $("config-error").textContent = "Could not reach the server.";
   } finally {
@@ -968,9 +994,14 @@ $("f-anom").addEventListener("change", rebuildTable);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyChartTheme);
 
 makeCharts();
-loadConfig();
-backfill().then(connect);
-pollStats();
+loadConfig().then(() => {
+  if (state.stateless) {
+    connect();                // stats arrive on the stream
+  } else {
+    backfill().then(connect);
+    pollStats();
+  }
+});
 requestAnimationFrame(renderFrame);
 </script>
 </body>

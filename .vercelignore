@@ -1,0 +1,9 @@
+.venv
+tests
+docs
+deploy
+*.md
+Dockerfile
+render.yaml
+memory_benchmark.py
+generate_charts.py
