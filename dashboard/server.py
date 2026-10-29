@@ -255,7 +255,7 @@ def create_app(config=None, public_demo=False, ssh_password=None, autostart=True
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
                 "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
-                "frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
+                "frame-ancestors 'self' https://huggingface.co; base-uri 'none'; form-action 'none'")
         return response
 
     @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
