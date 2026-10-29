@@ -27,7 +27,7 @@ web dashboard**.
 
 ## Quick start
 
-Python 3.10+.
+Python 3.12+.
 
 ```bash
 git clone https://github.com/dulfazl/log-forensics-engine.git
